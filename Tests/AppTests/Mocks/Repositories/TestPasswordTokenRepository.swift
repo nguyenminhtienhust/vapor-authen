@@ -1,7 +1,7 @@
 @testable import App
 import Vapor
 
-final class TestPasswordTokenRepository: PasswordTokenRepository, TestRepository {
+final class TestPasswordTokenRepository {//: PasswordTokenRepository, TestRepository {
     var eventLoop: EventLoop
     var tokens: [PasswordToken]
     

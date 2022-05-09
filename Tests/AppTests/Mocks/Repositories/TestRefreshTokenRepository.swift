@@ -2,7 +2,7 @@
 import Vapor
 import Crypto
 
-class TestRefreshTokenRepository: RefreshTokenRepository, TestRepository {
+class TestRefreshTokenRepository {//: RefreshTokenRepository, TestRepository {
     var tokens: [RefreshToken]
     var eventLoop: EventLoop
     

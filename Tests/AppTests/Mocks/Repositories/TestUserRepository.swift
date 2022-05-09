@@ -2,7 +2,7 @@
 import Vapor
 import Fluent
 
-class TestUserRepository: UserRepository, TestRepository {
+class TestUserRepository {//: UserRepository, TestRepository {
     var users: [User]
     var eventLoop: EventLoop
     

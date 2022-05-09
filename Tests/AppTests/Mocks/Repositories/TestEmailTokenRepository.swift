@@ -1,7 +1,7 @@
 @testable import App
 import Vapor
 
-class TestEmailTokenRepository: EmailTokenRepository, TestRepository {
+class TestEmailTokenRepository {//: EmailTokenRepository, TestRepository {
     var tokens: [EmailToken]
     var eventLoop: EventLoop
     

@@ -1,5 +1,7 @@
 import Vapor
 import Fluent
+import JWT
+import JWTKit
 
 final class User: Model, Authenticatable {
     static let schema = "users"

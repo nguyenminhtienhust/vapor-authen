@@ -1,11 +1,11 @@
 import Vapor
 
 struct ResetPasswordRequest: Content {
-    let email: String
+    let phone: String
 }
 
 extension ResetPasswordRequest: Validatable {
     static func validations(_ validations: inout Validations) {
-        validations.add("email", as: String.self, is: .email)
+        validations.add("phone", as: String.self, is: .alphanumeric)
     }
 }

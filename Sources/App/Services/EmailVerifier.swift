@@ -1,5 +1,6 @@
 import Vapor
 import Queues
+import AsyncHTTPClient
 
 struct EmailVerifier {
     let emailTokenRepository: EmailTokenRepository
@@ -8,21 +9,20 @@ struct EmailVerifier {
     let eventLoop: EventLoop
     let generator: RandomGenerator
     
-    func verify(for user: User) -> EventLoopFuture<Void> {
-//        do {
-//            let token = generator.generate(bits: 256)
-//            let emailToken = try EmailToken(userID: user.requireID(), token: SHA256.hash(token))
-//            let verifyUrl = url(token: token)
-//            return emailTokenRepository.create(emailToken).flatMap {
-//                self.queue.dispatch(EmailJob.self, .init(VerificationEmail(verifyUrl: verifyUrl), to: user.email))
-//            }
-//        } catch {
-//            return eventLoop.makeFailedFuture(error)
-//        }
-        return eventLoop.makeSucceededVoidFuture()
+    func verify(for user: User) async throws {
+        do {
+            let token = generator.generate(bits: 256)
+            let emailToken = try EmailToken(userID: user.requireID(), token: SHA256.hash(token))
+            let verifyUrl = try await url(token: token)
+            try await emailTokenRepository.create(emailToken)
+            //self.queue.dispatch(EmailJob.self, .init(VerificationEmail(verifyUrl: verifyUrl), to: user.email))
+        } catch {
+            return 
+        }
+        return
     }
     
-    private func url(token: String) -> String {
+    private func url(token: String) async throws -> String {
         #"\#(config.apiURL)/auth/email-verification?token=\#(token)"#
     }
 }

@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import AsyncHTTPClient
 
 struct AuthenticationController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -7,7 +8,7 @@ struct AuthenticationController: RouteCollection {
             auth.post("register", use: register)
             auth.post("login", use: login)
             
-            auth.group("email-verification") { emailVerificationRoutes in
+            auth.group("phone-verification") { emailVerificationRoutes in
                 emailVerificationRoutes.post("", use: sendEmailVerification)
                 emailVerificationRoutes.get("", use: verifyEmail)
             }
@@ -20,173 +21,136 @@ struct AuthenticationController: RouteCollection {
             
             auth.post("accessToken", use: refreshAccessToken)
             
-            // Authentication required
             auth.group(UserAuthenticator()) { authenticated in
                 authenticated.get("me", use: getCurrentUser)
             }
         }
     }
     
-    private func register(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
+    private func register(_ req: Request) async throws -> HTTPStatus {
         try RegisterRequest.validate(content: req)
         let registerRequest = try req.content.decode(RegisterRequest.self)
         guard registerRequest.password == registerRequest.confirmPassword else {
             throw AuthenticationError.passwordsDontMatch
         }
-        
-        return req.password
-            .async
-            .hash(registerRequest.password)
-            .flatMapThrowing { try User(from: registerRequest, hash: $0) }
-            .flatMap { user in
-                req.users
-                    .create(user)
-                    .flatMapErrorThrowing {
-                        if let dbError = $0 as? DatabaseError, dbError.isConstraintFailure {
-                            throw AuthenticationError.phoneAlreadyExists
-                        }
-                        throw $0
-                }
-                .flatMap { req.emailVerifier.verify(for: user) }
-        }
-        .transform(to: .created)
+        let hash = try await req.password.hash(registerRequest.password)
+        let user = try User(from: registerRequest, hash: hash)
+        try await req.users.create(user)
+        try await req.emailVerifier.verify(for: user)
+        return HTTPStatus.ok
     }
     
-    private func login(_ req: Request) throws -> EventLoopFuture<LoginResponse> {
+    private func login(_ req: Request) async throws -> LoginResponse {
         try LoginRequest.validate(content: req)
         let loginRequest = try req.content.decode(LoginRequest.self)
         
-        return req.users
-            .find(email: loginRequest.phone)
-            .unwrap(or: AuthenticationError.invalidEmailOrPassword)
-            .guard({ $0.isActive }, else: AuthenticationError.emailIsNotVerified)
-            .flatMap { user -> EventLoopFuture<User> in
-                return req.password
-                    .async
-                    .verify(loginRequest.password, created: user.passwordHash)
-                    .guard({ $0 == true }, else: AuthenticationError.invalidEmailOrPassword)
-                    .transform(to: user)
-        }
-        .flatMap { user -> EventLoopFuture<User> in
-            do {
-                return try req.refreshTokens.delete(for: user.requireID()).transform(to: user)
-            } catch {
-                return req.eventLoop.makeFailedFuture(error)
-            }
-        }
-        .flatMap { user in
-            do {
-                let token = req.random.generate(bits: 256)
-                let refreshToken = try RefreshToken(token: SHA256.hash(token), userID: user.requireID())
-                
-                return req.refreshTokens
-                    .create(refreshToken)
-                    .flatMapThrowing {
-                        try LoginResponse(
-                            user: UserDTO(from: user),
-                            accessToken: req.jwt.sign(Payload(with: user)),
-                            refreshToken: token
-                        )
+        if let user = try await req.users.find(phone: loginRequest.phone) {
+            if !user.isActive {
+                throw AuthenticationError.emailIsNotVerified
+            }else{
+                let status = try await req.password.verify(loginRequest.password, created: user.passwordHash)
+                if !status {
+                    throw AuthenticationError.invalidEmailOrPassword
+                }else{
+                    let token = req.random.generate(bits: 256)
+                    return try LoginResponse(user: UserDTO(from: user), accessToken: req.jwt.sign(Payload(with: user)), refreshToken: token)
                 }
-            } catch {
-                return req.eventLoop.makeFailedFuture(error)
             }
+        }else{
+            throw AuthenticationError.userNotFound
         }
     }
     
-    private func refreshAccessToken(_ req: Request) throws -> EventLoopFuture<AccessTokenResponse> {
+    private func refreshAccessToken(_ req: Request) async throws -> AccessTokenResponse {
         let accessTokenRequest = try req.content.decode(AccessTokenRequest.self)
         let hashedRefreshToken = SHA256.hash(accessTokenRequest.refreshToken)
-        
-        return req.refreshTokens
-            .find(token: hashedRefreshToken)
-            .unwrap(or: AuthenticationError.refreshTokenOrUserNotFound)
-            .flatMap { req.refreshTokens.delete($0).transform(to: $0) }
-            .guard({ $0.expiresAt > Date() }, else: AuthenticationError.refreshTokenHasExpired)
-            .flatMap { req.users.find(id: $0.$user.id) }
-            .unwrap(or: AuthenticationError.refreshTokenOrUserNotFound)
-            .flatMap { user in
-                do {
+        if let refreshToken = try await req.refreshTokens.find(token: hashedRefreshToken){
+           try await req.refreshTokens.delete(refreshToken)
+            if refreshToken.expiresAt > Date() {
+                if let user = try await req.users.find(id: refreshToken.$user.id) {
                     let token = req.random.generate(bits: 256)
                     let refreshToken = try RefreshToken(token: SHA256.hash(token), userID: user.requireID())
-                    
                     let payload = try Payload(with: user)
                     let accessToken = try req.jwt.sign(payload)
-                    
-                    return req.refreshTokens
+                    try await req.refreshTokens
                         .create(refreshToken)
-                        .transform(to: (token, accessToken))
-                } catch {
-                    return req.eventLoop.makeFailedFuture(error)
+                    return AccessTokenResponse(refreshToken: token, accessToken: accessToken)
+                }else{
+                    throw AuthenticationError.refreshTokenOrUserNotFound
                 }
+            }else{
+                throw AuthenticationError.refreshTokenHasExpired
+            }
+
+        }else{
+            throw AuthenticationError.refreshTokenOrUserNotFound
         }
-        .map { AccessTokenResponse(refreshToken: $0, accessToken: $1) }
     }
     
-    private func getCurrentUser(_ req: Request) throws -> EventLoopFuture<UserDTO> {
+    private func getCurrentUser(_ req: Request) async throws -> UserDTO {
         let payload = try req.auth.require(Payload.self)
-        
-        return req.users
-            .find(id: payload.userID)
-            .unwrap(or: AuthenticationError.userNotFound)
-            .map { UserDTO(from: $0) }
-    }
-    
-    private func verifyEmail(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
-        let token = try req.query.get(String.self, at: "token")
-        
-        let hashedToken = SHA256.hash(token)
-        
-        return req.emailTokens
-            .find(token: hashedToken)
-            .unwrap(or: AuthenticationError.emailTokenNotFound)
-            .flatMap { req.emailTokens.delete($0).transform(to: $0) }
-            .guard({ $0.expiresAt > Date() },
-                   else: AuthenticationError.emailTokenHasExpired)
-            .flatMap {
-                req.users.set(\.$isActive, to: true, for: $0.$user.id)
+        if let user = try await req.users.find(id: payload.userID) {
+            return UserDTO(from: user)
+        }else{
+            throw AuthenticationError.userNotFound
         }
-        .transform(to: .ok)
     }
     
-    private func resetPassword(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
+    private func verifyEmail(_ req: Request) async throws -> HTTPStatus {
+        let token = try req.query.get(String.self, at: "token")
+        let hashedToken = SHA256.hash(token)
+        if let user = try await req.emailTokens.find(token: hashedToken) {
+            try await req.emailTokens.delete(user)
+            if user.expiresAt > Date() {
+                try await req.users.set(\.$isActive, to: true, for: user.$user.id)
+                return HTTPStatus.ok
+            }else{
+                throw AuthenticationError.emailTokenHasExpired
+            }
+        }else{
+            throw AuthenticationError.emailTokenNotFound
+        }
+    }
+    
+    private func resetPassword(_ req: Request) async throws -> HTTPStatus {
         let resetPasswordRequest = try req.content.decode(ResetPasswordRequest.self)
-        
-        return req.users
-            .find(email: resetPasswordRequest.email)
-            .flatMap {
-                if let user = $0 {
-                    return req.passwordResetter
-                        .reset(for: user)
-                        .transform(to: .noContent)
-                } else {
-                    return req.eventLoop.makeSucceededFuture(.noContent)
-                }
-        }
+        return HTTPStatus.ok
+//        return req.users
+//            .find(email: resetPasswordRequest.email)
+//            .flatMap {
+//                if let user = $0 {
+//                    return req.passwordResetter
+//                        .reset(for: user)
+//                        .transform(to: .noContent)
+//                } else {
+//                    return req.eventLoop.makeSucceededFuture(.noContent)
+//                }
+//        }
     }
     
-    private func verifyResetPasswordToken(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
+    private func verifyResetPasswordToken(_ req: Request) async throws -> HTTPStatus {
         let token = try req.query.get(String.self, at: "token")
         
         let hashedToken = SHA256.hash(token)
-        
-        return req.passwordTokens
-            .find(token: hashedToken)
-            .unwrap(or: AuthenticationError.invalidPasswordToken)
-            .flatMap { passwordToken in
-                guard passwordToken.expiresAt > Date() else {
-                    return req.passwordTokens
-                        .delete(passwordToken)
-                        .transform(to: req.eventLoop
-                            .makeFailedFuture(AuthenticationError.passwordTokenHasExpired)
-                    )
-                }
-                
-                return req.eventLoop.makeSucceededFuture(.noContent)
-        }
+        return HTTPStatus.ok
+
+//        return req.passwordTokens
+//            .find(token: hashedToken)
+//            .unwrap(or: AuthenticationError.invalidPasswordToken)
+//            .flatMap { passwordToken in
+//                guard passwordToken.expiresAt > Date() else {
+//                    return req.passwordTokens
+//                        .delete(passwordToken)
+//                        .transform(to: req.eventLoop
+//                            .makeFailedFuture(AuthenticationError.passwordTokenHasExpired)
+//                    )
+//                }
+//
+//                return req.eventLoop.makeSucceededFuture(.noContent)
+//        }
     }
     
-    private func recoverAccount(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
+    private func recoverAccount(_ req: Request) async throws -> HTTPStatus {
         try RecoverAccountRequest.validate(content: req)
         let content = try req.content.decode(RecoverAccountRequest.self)
         
@@ -195,43 +159,55 @@ struct AuthenticationController: RouteCollection {
         }
         
         let hashedToken = SHA256.hash(content.token)
-        
-        return req.passwordTokens
-            .find(token: hashedToken)
-            .unwrap(or: AuthenticationError.invalidPasswordToken)
-            .flatMap { passwordToken -> EventLoopFuture<Void> in
-                guard passwordToken.expiresAt > Date() else {
-                    return req.passwordTokens
-                        .delete(passwordToken)
-                        .transform(to: req.eventLoop
-                            .makeFailedFuture(AuthenticationError.passwordTokenHasExpired)
-                    )
-                }
-                
-                return req.password
-                    .async
-                    .hash(content.password)
-                    .flatMap { digest in
-                        req.users.set(\.$passwordHash, to: digest, for: passwordToken.$user.id)
-                }
-                .flatMap { req.passwordTokens.delete(for: passwordToken.$user.id) }
-        }
-        .transform(to: .noContent)
+        return HTTPStatus.ok
+
+//        return req.passwordTokens
+//            .find(token: hashedToken)
+//            .unwrap(or: AuthenticationError.invalidPasswordToken)
+//            .flatMap { passwordToken -> EventLoopFuture<Void> in
+//                guard passwordToken.expiresAt > Date() else {
+//                    return req.passwordTokens
+//                        .delete(passwordToken)
+//                        .transform(to: req.eventLoop
+//                            .makeFailedFuture(AuthenticationError.passwordTokenHasExpired)
+//                    )
+//                }
+//
+//                return req.password
+//                    .async
+//                    .hash(content.password)
+//                    .flatMap { digest in
+//                        req.users.set(\.$passwordHash, to: digest, for: passwordToken.$user.id)
+//                }
+//                .flatMap { req.passwordTokens.delete(for: passwordToken.$user.id) }
+//        }
+//        .transform(to: .noContent)
     }
     
-    private func sendEmailVerification(_ req: Request) throws -> EventLoopFuture<HTTPStatus> {
-        let content = try req.content.decode(SendEmailVerificationRequest.self)
-        
-        return req.users
-            .find(email: content.email)
-            .flatMap {
-                guard let user = $0, !user.isActive else {
-                    return req.eventLoop.makeSucceededFuture(.noContent)
-                }
-                
-                return req.emailVerifier
-                    .verify(for: user)
-                    .transform(to: .noContent)
+    private func sendEmailVerification(_ req: Request) async throws -> HTTPStatus {
+        let content = try req.content.decode(SendPhoneVerificationRequest.self)
+        if let user = try await req.users.find(phone: content.phone) {
+            if user.isActive {
+                try await req.emailVerifier.verify(for: user)
+                return HTTPStatus.ok
+            }else{
+                return HTTPStatus.noContent
+            }
+        }else{
+            return HTTPStatus.noContent
         }
+    }
+}
+
+extension PasswordHasher {
+    public func hash(_ password: String) async throws -> String {
+        return try String(decoding: self.hash([UInt8](password.utf8)), as: UTF8.self)
+    }
+
+    public func verify(_ password: String, created digest: String) async throws -> Bool {
+        return try self.verify(
+            [UInt8](password.utf8),
+            created: [UInt8](digest.utf8)
+        )
     }
 }

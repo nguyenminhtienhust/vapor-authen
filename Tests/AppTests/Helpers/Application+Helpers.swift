@@ -14,7 +14,7 @@ extension Application {
         afterResponse: (XCTHTTPResponse) throws -> () = { _ in },
         file: StaticString = #file,
         line: UInt = #line
-    ) throws -> XCTApplicationTester {
+    ) async throws -> XCTApplicationTester {
         var headers = headers
         
         if let token = accessToken {
@@ -40,11 +40,11 @@ extension Application {
         afterResponse: (XCTHTTPResponse) throws -> () = { _ in },
         file: StaticString = #file,
         line: UInt = #line
-    ) throws -> XCTApplicationTester {
+    ) async throws -> XCTApplicationTester {
         let payload = try Payload(with: user)
         let accessToken = try self.jwt.signers.sign(payload)
         var headers = headers
         headers.add(name: "Authorization", value: "Bearer \(accessToken)")
-        return try test(method, path, headers: headers, afterResponse: afterResponse)
+        return try await test(method, path, headers: headers, afterResponse: afterResponse)
     }
 }
