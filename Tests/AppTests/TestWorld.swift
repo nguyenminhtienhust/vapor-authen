@@ -14,7 +14,7 @@ class TestWorld {
     
     private var refreshtokens: [RefreshToken] = []
     private var users: [User] = []
-    private var emailTokens: [EmailToken] = []
+    private var emailTokens: [UserPhoneToken] = []
     private var passwordTokens: [PasswordToken] = []
     
     init(app: Application) throws {

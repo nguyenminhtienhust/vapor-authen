@@ -20,7 +20,7 @@ extension Application {
             static var database: Self {
                 .init {
                     $0.repositories.use { DatabaseUserRepository(database: $0.db) }
-                    $0.repositories.use { DatabaseEmailTokenRepository(database: $0.db) }
+                    $0.repositories.use { DatabaseUserTokenRepository(database: $0.db) }
                     $0.repositories.use { DatabaseRefreshTokenRepository(database: $0.db) }
                     $0.repositories.use { DatabasePasswordTokenRepository(database: $0.db) }
                 }
@@ -31,7 +31,7 @@ extension Application {
         
         final class Storage {
             var makeUserRepository: ((Application) -> UserRepository)?
-            var makeEmailTokenRepository: ((Application) -> EmailTokenRepository)?
+            var makeEmailTokenRepository: ((Application) -> UserTokenRepository)?
             var makeRefreshTokenRepository: ((Application) -> RefreshTokenRepository)?
             var makePasswordTokenRepository: ((Application) -> PasswordTokenRepository)?
             init() { }

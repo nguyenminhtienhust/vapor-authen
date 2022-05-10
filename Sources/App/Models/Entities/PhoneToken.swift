@@ -1,8 +1,8 @@
 import Vapor
 import Fluent
 
-final class EmailToken: Model {
-    static let schema = "user_email_tokens"
+final class UserPhoneToken: Model {
+    static let schema = "user_phone_tokens"
     
     @ID(key: .id)
     var id: UUID?
@@ -22,7 +22,7 @@ final class EmailToken: Model {
         id: UUID? = nil,
         userID: UUID,
         token: String,
-        expiresAt: Date = Date().addingTimeInterval(Constants.EMAIL_TOKEN_LIFETIME)
+        expiresAt: Date = Date().addingTimeInterval(Constants.USER_PHONE_TOKEN_LIFETIME)
     ) {
         self.id = id
         self.$user.id = userID

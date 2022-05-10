@@ -7,6 +7,7 @@ struct AuthenticationController: RouteCollection {
         routes.group("auth") { auth in
             auth.post("register", use: register)
             auth.post("login", use: login)
+            auth.post("create", use: createUser)
             
             auth.group("phone-verification") { emailVerificationRoutes in
                 emailVerificationRoutes.post("", use: sendEmailVerification)
@@ -23,7 +24,7 @@ struct AuthenticationController: RouteCollection {
             
             auth.group(UserAuthenticator()) { authenticated in
                 authenticated.get("me", use: getCurrentUser)
-            }
+            } 
         }
     }
     
@@ -36,7 +37,17 @@ struct AuthenticationController: RouteCollection {
         let hash = try await req.password.hash(registerRequest.password)
         let user = try User(from: registerRequest, hash: hash)
         try await req.users.create(user)
-        try await req.emailVerifier.verify(for: user)
+        try await req.userVerifier.verify(for: user)
+        return HTTPStatus.ok
+    }
+    
+    private func createUser(_ req: Request) async throws -> HTTPStatus {
+        try CreateUserRequest.validate(content: req)
+        let createRequest = try req.content.decode(CreateUserRequest.self)
+        let hash = try await req.password.hash(createRequest.password)
+        let user = try User(from: createRequest, hash: hash)
+        try await req.users.create(user)
+        try await req.userVerifier.verify(for: user)
         return HTTPStatus.ok
     }
     
@@ -46,7 +57,7 @@ struct AuthenticationController: RouteCollection {
         
         if let user = try await req.users.find(phone: loginRequest.phone) {
             if !user.isActive {
-                throw AuthenticationError.emailIsNotVerified
+                throw AuthenticationError.userNotActive
             }else{
                 let status = try await req.password.verify(loginRequest.password, created: user.passwordHash)
                 if !status {
@@ -188,7 +199,7 @@ struct AuthenticationController: RouteCollection {
         let content = try req.content.decode(SendPhoneVerificationRequest.self)
         if let user = try await req.users.find(phone: content.phone) {
             if user.isActive {
-                try await req.emailVerifier.verify(for: user)
+                try await req.userVerifier.verify(for: user)
                 return HTTPStatus.ok
             }else{
                 return HTTPStatus.noContent

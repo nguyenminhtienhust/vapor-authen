@@ -10,6 +10,7 @@ enum AuthenticationError: AppError {
     case emailTokenHasExpired
     case emailTokenNotFound
     case emailIsNotVerified
+    case userNotActive
     case invalidPasswordToken
     case passwordTokenHasExpired
 }
@@ -34,6 +35,8 @@ extension AuthenticationError: AbortError {
         case .refreshTokenHasExpired:
             return .unauthorized
         case .emailIsNotVerified:
+            return .unauthorized
+        case .userNotActive:
             return .unauthorized
         case .invalidPasswordToken:
             return .notFound
@@ -62,6 +65,8 @@ extension AuthenticationError: AbortError {
             return "Email token has expired"
         case .emailIsNotVerified:
             return "Email is not verified"
+        case .userNotActive:
+            return "Người dùng chưa được kích hoạt"
         case .invalidPasswordToken:
             return "Invalid reset password token"
         case .passwordTokenHasExpired:
@@ -89,6 +94,8 @@ extension AuthenticationError: AbortError {
             return "email_token_has_expired"
         case .emailIsNotVerified:
             return "email_is_not_verified"
+        case .userNotActive:
+            return "user_not_active"
         case .invalidPasswordToken:
             return "invalid_password_token"
         case .passwordTokenHasExpired:

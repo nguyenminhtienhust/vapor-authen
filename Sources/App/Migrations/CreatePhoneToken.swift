@@ -1,9 +1,9 @@
 import Fluent
 import AsyncKit
 
-struct CreateEmailToken: AsyncMigration {
+struct CreatePhoneToken: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema("user_email_tokens")
+        try await database.schema("user_phone_tokens")
             .id()
             .field("user_id", .uuid, .required, .references("users", "id", onDelete: .cascade))
             .field("token", .string, .required)
